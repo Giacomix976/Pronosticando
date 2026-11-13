@@ -22,7 +22,7 @@ main{max-width:1050px;margin:auto;padding:22px 15px 60px}.brand{display:flex;ali
 <nav class="tabs"><button class="active" data-tab="pred">Pronostici</button><button data-tab="rank">Classifica</button><button data-tab="scorers">Marcatori</button><button data-tab="admin" id="adminTab" class="hidden">Amministrazione</button></nav>
 <section id="tab-pred" class="card"><div class="hero"><h2>Pronostici</h2><button class="secondary" id="refresh">Aggiorna</button></div><label for="dayselect">Seleziona giornata</label><select id="dayselect"></select><div id="dayhint" class="notice hidden"></div><div id="matches" class="empty">Caricamento…</div></section>
 <section id="tab-rank" class="card hidden"><h2>Classifica generale</h2><div id="ranking" class="empty">Caricamento…</div></section>
-<section id="tab-scorers" class="card hidden"><h2>Marcatori</h2><p class="muted tiny">Puoi scegliere un marcatore per ogni giornata. Se Serie A e Champions hanno giornate aperte nello stesso periodo, potrai inserire una scelta per ciascuna. Puoi correggerla fino alla scadenza della rispettiva giornata.</p><div id="scorerform"></div><div id="scorerlist"></div></section>
+<section id="tab-scorers" class="card hidden"><h2>Marcatori</h2><p class="muted tiny">Il marcatore si sblocca insieme ai pronostici della giornata attiva. Le giornate future restano bloccate. Puoi correggere la scelta fino alla scadenza.</p><div id="scorerform"></div><div id="scorerlist"></div></section>
 <section id="tab-admin" class="card hidden"><h2>Pannello amministratore</h2><p class="muted tiny">Gestione competizioni, giornate, partite e risultati.</p>
 <div class="card"><h3>Calendari UEFA</h3>
 <p class="muted tiny">Importa/aggiorna i calendari Champions League, Europa League e Conference League.</p>
@@ -77,71 +77,53 @@ async function savePrediction(id){let match=matches.find(m=>m.id===id),day=days.
 async function loadRanking(){let [p,s]=await Promise.all([sb.from('players').select('id,display_name'),sb.from('player_scores').select('player_id,points')]);if(p.error||s.error){$('ranking').textContent='Classifica non disponibile: '+(p.error?.message||s.error?.message);return}let totals={};(s.data||[]).forEach(x=>totals[x.player_id]=(totals[x.player_id]||0)+Number(x.points||0));let rows=(p.data||[]).map(x=>({...x,points:totals[x.id]||0})).sort((a,b)=>b.points-a.points);$('ranking').innerHTML=rows.map((x,i)=>`<div class="listrow"><b>${i+1}. ${esc(x.display_name)}</b><strong>${x.points} pt</strong></div>`).join('')||'Classifica vuota.'}
 async function loadScorers(){
  let r=await sb.from('scorer_predictions').select('*').eq('player_id',player.id);
- if(r.error){$('scorerform').innerHTML='<p class="muted">Impossibile caricare i marcatori: '+esc(r.error.message)+'</p>';return}
+ if(r.error){$('scorerform').innerHTML='<p class="muted">Impossibile caricare il marcatore: '+esc(r.error.message)+'</p>';return}
  const rows=r.data||[];
+ const day=days.find(d=>d.id===activeDayId);
+ const dayMatches=matches.filter(m=>m.matchday_id===activeDayId);
+ const existing=rows.filter(x=>dayMatches.some(m=>m.id===x.match_id));
  const now=Date.now();
- const openDays=orderedDays().filter(day=>{
-   const dayMatches=matches.filter(m=>m.matchday_id===day.id);
-   return day.status==='open' &&
-     (!day.deadline_at||new Date(day.deadline_at).getTime()>now) &&
-     dayMatches.some(m=>!m.is_finished&&(!m.kickoff_at||new Date(m.kickoff_at).getTime()>now));
- });
+ const firstMatch=dayMatches
+   .filter(m=>!m.is_finished&&(!m.kickoff_at||new Date(m.kickoff_at).getTime()>now))
+   .sort((a,b)=>new Date(a.kickoff_at||0)-new Date(b.kickoff_at||0))[0];
+ const open=!!day&&day.status==='open'&&
+   (!day.deadline_at||new Date(day.deadline_at).getTime()>now)&&
+   !!firstMatch;
  $('scorerform').innerHTML='';
- if(!openDays.length){
-   $('scorerform').innerHTML='<p class="muted">Al momento non ci sono giornate aperte per inserire i marcatori.</p>';
+ if(!day){
+   $('scorerform').innerHTML='<p class="muted">Non c’è una giornata attiva: il marcatore non è ancora disponibile.</p>';
+ } else if(existing.length>1){
+   $('scorerform').innerHTML=`<p class="notice error">Sono presenti più marcatori per ${esc(dayDisplayName(day))}. Contatta un amministratore per correggere i dati.</p>`;
+ } else if(existing.length===1){
+   const x=existing[0];
+   $('scorerform').innerHTML=`<div class="match"><b>${esc(dayDisplayName(day))}</b><p>La tua scelta: <strong>${esc(x.scorer_name)}</strong> · ${esc(x.scorer_role)} ${x.is_own_goal?'· Autogol':''}</p>
+   ${open?`<label>Modifica il marcatore di questa giornata</label><input id="sn" value="${esc(x.scorer_name)}" placeholder="Nome e cognome">
+   <div class="row"><select id="sr"><option value="forward" ${x.scorer_role==='forward'?'selected':''}>Attaccante</option><option value="midfielder" ${x.scorer_role==='midfielder'?'selected':''}>Centrocampista</option><option value="defender" ${x.scorer_role==='defender'?'selected':''}>Difensore</option><option value="goalkeeper" ${x.scorer_role==='goalkeeper'?'selected':''}>Portiere</option></select><label><input type="checkbox" id="og" style="width:auto" ${x.is_own_goal?'checked':''}> Autogol</label></div>
+   <button id="saveOneScorer">Aggiorna marcatore</button>`:'<p class="tiny muted">Scelta bloccata: la giornata non è più aperta.</p>'}</div>`;
+   if(open)$('saveOneScorer').onclick=()=>saveScorer(x.match_id,x.id,day.id);
+ } else if(open){
+   $('scorerform').innerHTML=`<div class="match"><b>${esc(dayDisplayName(day))}</b><p class="tiny muted">Il marcatore si sblocca insieme ai pronostici di questa giornata. Le altre giornate restano bloccate.</p>
+   <label>Nome e cognome del marcatore</label><input id="sn" placeholder="Es. Lautaro Martínez">
+   <div class="row"><select id="sr"><option value="forward">Attaccante</option><option value="midfielder">Centrocampista</option><option value="defender">Difensore</option><option value="goalkeeper">Portiere</option></select><label><input type="checkbox" id="og" style="width:auto"> Autogol</label></div>
+   <button id="saveOneScorer">Salva marcatore</button></div>`;
+   $('saveOneScorer').onclick=()=>saveScorer(firstMatch.id,null,day.id);
  } else {
-   openDays.forEach(day=>{
-     const dayMatches=matches.filter(m=>m.matchday_id===day.id).sort((a,b)=>new Date(a.kickoff_at||0)-new Date(b.kickoff_at||0));
-     const matchIds=dayMatches.map(m=>m.id);
-     const existing=rows.filter(x=>matchIds.includes(x.match_id));
-     const firstMatch=dayMatches.find(m=>!m.is_finished&&(!m.kickoff_at||new Date(m.kickoff_at).getTime()>now));
-     const wrap=document.createElement('div');
-     wrap.className='match';
-     if(existing.length>1){
-       wrap.innerHTML=`<b>${esc(dayDisplayName(day))}</b><p class="notice error">Sono presenti più marcatori per questa giornata. Contatta un amministratore per correggere i dati.</p>`;
-     } else if(existing.length===1){
-       const x=existing[0];
-       wrap.innerHTML=`<b>${esc(dayDisplayName(day))}</b><p>La tua scelta: <strong>${esc(x.scorer_name)}</strong> · ${esc(x.scorer_role)} ${x.is_own_goal?'· Autogol':''}</p>
-       <label>Modifica il marcatore di questa giornata</label>
-       <input id="sn_${day.id}" value="${esc(x.scorer_name)}" placeholder="Nome e cognome">
-       <div class="row"><select id="sr_${day.id}">
-       <option value="forward" ${x.scorer_role==='forward'?'selected':''}>Attaccante</option>
-       <option value="midfielder" ${x.scorer_role==='midfielder'?'selected':''}>Centrocampista</option>
-       <option value="defender" ${x.scorer_role==='defender'?'selected':''}>Difensore</option>
-       <option value="goalkeeper" ${x.scorer_role==='goalkeeper'?'selected':''}>Portiere</option>
-       </select><label><input type="checkbox" id="og_${day.id}" style="width:auto" ${x.is_own_goal?'checked':''}> Autogol</label></div>
-       <button data-scorer-save="${day.id}" data-existing="${x.id}" data-match="${x.match_id}">Aggiorna marcatore</button>`;
-     } else if (firstMatch) {
-       wrap.innerHTML=`<b>${esc(dayDisplayName(day))}</b><label>Nome e cognome del marcatore</label>
-       <input id="sn_${day.id}" placeholder="Es. Lautaro Martínez">
-       <div class="row"><select id="sr_${day.id}">
-       <option value="forward">Attaccante</option><option value="midfielder">Centrocampista</option>
-       <option value="defender">Difensore</option><option value="goalkeeper">Portiere</option>
-       </select><label><input type="checkbox" id="og_${day.id}" style="width:auto"> Autogol</label></div>
-       <button data-scorer-save="${day.id}" data-match="${firstMatch.id}">Salva marcatore</button>`;
-     }
-     $('scorerform').appendChild(wrap);
-   });
-   document.querySelectorAll('[data-scorer-save]').forEach(b=>{
-     b.onclick=()=>saveScorer(b.dataset.match,b.dataset.existing||null,b.dataset.scorerSave);
-   });
+   $('scorerform').innerHTML=`<p class="muted">Il marcatore di ${esc(dayDisplayName(day))} non è ancora disponibile: si sbloccherà quando si apriranno i pronostici della giornata.</p>`;
  }
- $('scorerlist').innerHTML=rows.map(x=>{
-   const m=matches.find(mm=>mm.id===x.match_id);
-   const d=days.find(dd=>dd.id===m?.matchday_id);
-   if(!d || openDays.some(od=>od.id===d.id)) return '';
-   return `<div class="listrow"><span>${esc(dayDisplayName(d))}: ${esc(x.scorer_name)} · ${esc(x.scorer_role)} ${x.is_own_goal?'· Autogol':''}</span><span class="tiny muted">Scelta bloccata</span></div>`;
+ $('scorerlist').innerHTML=rows.filter(x=>!dayMatches.some(m=>m.id===x.match_id)).map(x=>{
+   const m=matches.find(mm=>mm.id===x.match_id),d=days.find(dd=>dd.id===m?.matchday_id);
+   return `<div class="listrow">${esc(dayDisplayName(d||{label:'Giornata'}))}: ${esc(x.scorer_name)} · ${esc(x.scorer_role)} ${x.is_own_goal?'· Autogol':''}</div>`;
  }).join('');
 }
 async function saveScorer(id,existingId,dayId){
- let match=matches.find(m=>m.id===id),day=days.find(d=>d.id===dayId||d.id===match?.matchday_id);
- if(!match||!day||match.matchday_id!==day.id||day.status!=='open'||
+ let match=matches.find(m=>m.id===id),day=days.find(d=>d.id===dayId);
+ if(!match||!day||match.matchday_id!==day.id||day.id!==activeDayId||day.status!=='open'||
     day.deadline_at&&new Date(day.deadline_at)<=new Date()||
-    !matches.some(m=>m.matchday_id===day.id&&!m.is_finished&&(!m.kickoff_at||new Date(m.kickoff_at)>new Date())))
-   return msg('I pronostici marcatori per questa giornata sono chiusi.',true);
- let name=$('sn_'+dayId).value.trim();
+    match.kickoff_at&&new Date(match.kickoff_at)<=new Date())
+   return msg('I pronostici marcatori per questa giornata non sono aperti.',true);
+ let name=$('sn').value.trim();
  if(!name)return msg('Inserisci il nome del marcatore.',true);
- let payload={match_id:id,player_id:player.id,scorer_name:name,scorer_role:$('sr_'+dayId).value,is_own_goal:$('og_'+dayId).checked};
+ let payload={match_id:id,player_id:player.id,scorer_name:name,scorer_role:$('sr').value,is_own_goal:$('og').checked};
  let result=existingId
    ?await sb.from('scorer_predictions').update(payload).eq('id',existingId)
    :await sb.from('scorer_predictions').insert(payload);
