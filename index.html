@@ -43,7 +43,7 @@ main{max-width:1050px;margin:auto;padding:22px 15px 60px}.brand{display:flex;ali
 <div class="card"><h3>Nuova giornata</h3><div class="grid"><div><label>Competizione</label><select id="daycomp"></select></div><div><label>Nome giornata</label><input id="daylabel" placeholder="Giornata 12 / Finale"></div><div><label>Scadenza pronostici</label><input id="deadline" type="datetime-local"></div></div><button id="addday">Crea giornata</button></div>
 <div class="card"><h3>Aggiungi partita</h3><div class="grid"><div><label>Giornata</label><select id="matchday"></select></div><div><label>Squadra casa</label><input id="home" placeholder="Inter"></div><div><label>Squadra ospite</label><input id="away" placeholder="Milan"></div><div><label>Data e ora</label><input id="kickoff" type="datetime-local"></div><div><label>Tipo</label><select id="mtype"><option value="regular">Normale</option><option value="final">Finale</option><option value="head_to_head">Scontro diretto</option></select></div><div style="align-self:end"><label><input id="jolly" type="checkbox" style="width:auto"> Partita Jolly</label></div></div><button id="addmatch">Aggiungi partita</button></div>
 <div class="card"><h3>Risultati ufficiali</h3><div id="adminmatches" class="empty">Nessuna partita caricata.</div></div>
-<div class="card"><h3>Giocatori e collegamento account</h3><div id="playersadmin" class="tiny muted">Caricamento…</div></div>
+<div class="card"><h3>Verifica marcatori</h3><p class="tiny muted">Conferma quali marcatori pronosticati sono corretti. Solo quelli confermati ricevono punti.</p><div id="scoreradmin" class="tiny muted">Caricamento…</div></div><div class="card"><h3>Ricalcolo classifica</h3><p class="tiny muted">Ricalcola i punteggi delle partite concluse senza duplicarli.</p><button id="recalcScores" class="secondary">Ricalcola tutti i punteggi</button></div><div class="card"><h3>Giocatori e collegamento account</h3><div id="playersadmin" class="tiny muted">Caricamento…</div></div>
 </section></section>
 <div id="status" class="notice hidden"></div><footer>PRONOSTICANDO · AREA RISERVATA AI GIOCATORI</footer>
 </main>
@@ -61,7 +61,7 @@ $('login').onclick=async()=>{let {data,error}=await sb.auth.signInWithPassword({
 $('signup').onclick=async()=>{let email=$('email').value.trim(),password=$('password').value;if(!email||password.length<6)return msg('Inserisci email e password di almeno 6 caratteri.',true);let {error}=await sb.auth.signUp({email,password});if(error)return msg(error.message,true);msg('Account creato. Conferma l’email se richiesto, poi chiedi all’amministratore di collegarlo al tuo giocatore.')};
 $('logout').onclick=async()=>{await sb.auth.signOut();location.reload()};
 async function loadUser(u){user=u;let {data,error}=await sb.from('players').select('*').eq('auth_user_id',u.id).maybeSingle();if(error)return msg('Errore lettura giocatore: '+error.message,true);if(!data)return msg('Account autenticato ma non collegato a un giocatore. Un amministratore deve associare il tuo account al tuo nome nella tabella players.',true);player=data;isAdmin=!!data.is_admin;$('auth').classList.add('hidden');$('app').classList.remove('hidden');$('userpill').textContent=data.display_name+(isAdmin?' · ADMIN':'');$('welcome').textContent='Ciao, '+data.display_name;if(isAdmin)$('adminTab').classList.remove('hidden');await refreshAll()}
-async function refreshAll(){await Promise.all([loadCompetitions(),loadDays(),loadRanking()]);await loadMatches();await loadScorers();if(isAdmin)await loadPlayersAdmin()}
+async function refreshAll(){await Promise.all([loadCompetitions(),loadDays(),loadRanking()]);await loadMatches();await loadScorers();if(isAdmin){await loadPlayersAdmin();await loadScorerAdmin()}}
 async function loadCompetitions(){let r=await sb.from('competitions').select('*').order('created_at');if(r.error){msg(r.error.message,true);return}competitions=r.data||[];$('daycomp').innerHTML=competitions.map(x=>`<option value="${x.id}">${esc(x.name)}</option>`).join('')}
 function competitionName(day){return competitions.find(c=>c.id===day.competition_id)?.name||'Competizione'}
 function dayDisplayName(day){return `${competitionName(day)} · ${day.label}`}
@@ -134,8 +134,48 @@ async function saveScorer(id,existingId,dayId){
 $('addcomp').onclick=async()=>{let name=$('cname').value.trim();if(!name)return msg('Inserisci il nome della competizione.',true);let {error}=await sb.from('competitions').insert({name,category:$('ccat').value});if(error)return msg(error.message,true);$('cname').value='';msg('Competizione creata.');await loadCompetitions()};
 $('addday').onclick=async()=>{let {error}=await sb.from('matchdays').insert({competition_id:$('daycomp').value,label:$('daylabel').value.trim(),deadline_at:$('deadline').value||null,status:'open'});if(error)return msg(error.message,true);msg('Giornata creata.');await loadDays()};
 $('addmatch').onclick=async()=>{let home=$('home').value.trim(),away=$('away').value.trim();if(!home||!away||!$('matchday').value)return msg('Completa giornata e nomi delle squadre.',true);let {error}=await sb.from('matches').insert({matchday_id:$('matchday').value,home_team:home,away_team:away,kickoff_at:$('kickoff').value||null,match_type:$('mtype').value,is_jolly:$('jolly').checked});if(error)return msg(error.message,true);$('home').value='';$('away').value='';msg('Partita aggiunta.');await loadMatches()};
-function renderAdminMatches(){$('adminmatches').innerHTML=matches.map(m=>`<div class="match"><b>${esc(m.home_team)} - ${esc(m.away_team)}</b><div class="row"><input type="number" min="0" id="rh${m.id}" placeholder="Gol casa" value="${m.result_home??''}"><input type="number" min="0" id="ra${m.id}" placeholder="Gol ospite" value="${m.result_away??''}"><button class="secondary" data-result="${m.id}">Salva risultato</button></div></div>`).join('')||'Nessuna partita.';document.querySelectorAll('[data-result]').forEach(b=>b.onclick=async()=>{let id=b.dataset.result,h=$('rh'+id).value,a=$('ra'+id).value;if(h===''||a==='')return msg('Inserisci entrambi i gol.',true);let {error}=await sb.from('matches').update({result_home:Number(h),result_away:Number(a),is_finished:true}).eq('id',id);if(error)return msg(error.message,true);msg('Risultato salvato. Il calcolo dei punti va verificato prima di assegnarli.');await loadMatches()})}
-async function loadPlayersAdmin(){let {data,error}=await sb.from('players').select('id,display_name,auth_user_id,is_admin').order('display_name');if(error){$('playersadmin').textContent=error.message;return}$('playersadmin').innerHTML=(data||[]).map(p=>`<div class="listrow"><span>${esc(p.display_name)} ${p.is_admin?'· ADMIN':''}</span><span>${p.auth_user_id?'Account collegato':'<b>Da collegare</b>'}</span></div>`).join('')}
+function renderAdminMatches(){
+ $('adminmatches').innerHTML=matches.map(m=>`<div class="match"><b>${esc(m.home_team)} - ${esc(m.away_team)}</b><span class="tiny muted">${m.is_bonus?' · ★ BONUS':m.is_jolly?' · ★ JOLLY':''}${m.match_type==='final'?' · FINALE':''}</span><div class="row"><input type="number" min="0" id="rh${m.id}" placeholder="Gol casa" value="${m.result_home??''}"><input type="number" min="0" id="ra${m.id}" placeholder="Gol ospite" value="${m.result_away??''}"><button class="secondary" data-result="${m.id}">Salva risultato</button></div></div>`).join('')||'Nessuna partita.';
+ document.querySelectorAll('[data-result]').forEach(b=>b.onclick=async()=>{
+  let id=b.dataset.result,h=$('rh'+id).value,a=$('ra'+id).value;
+  if(h===''||a==='')return msg('Inserisci entrambi i gol.',true);
+  b.disabled=true;
+  let {error}=await sb.from('matches').update({result_home:Number(h),result_away:Number(a),is_finished:true}).eq('id',id);
+  if(error){b.disabled=false;return msg(error.message,true)}
+  const calc=await sb.rpc('recalculate_pronosticando_scores');
+  if(calc.error){b.disabled=false;msg('Risultato salvato, ma errore nel ricalcolo: '+calc.error.message,true);await loadMatches();return}
+  msg('Risultato salvato e punteggi ricalcolati.');
+  await Promise.all([loadMatches(),loadRanking()]);
+  if(isAdmin)await loadScorerAdmin();
+ });
+}
+async function loadScorerAdmin(){
+ const [sr,pr]=await Promise.all([sb.from('scorer_predictions').select('*').order('created_at',{ascending:false}),sb.from('players').select('id,display_name')]);
+ if(sr.error||pr.error){$('scoreradmin').textContent=sr.error?.message||pr.error?.message;return}
+ const pmap=Object.fromEntries((pr.data||[]).map(p=>[p.id,p.display_name]));
+ const mmap=Object.fromEntries(matches.map(m=>[m.id,m]));
+ const rows=sr.data||[];
+ if(!rows.length){$('scoreradmin').innerHTML='<p class="muted">Nessun marcatore inserito.</p>';return}
+ $('scoreradmin').innerHTML=rows.map(x=>{const m=mmap[x.match_id];return `<div class="listrow" style="gap:10px;align-items:center;flex-wrap:wrap"><span><b>${esc(pmap[x.player_id]||'Giocatore')}</b> · ${esc(x.scorer_name)} (${esc(x.scorer_role)})<br><span class="tiny muted">${esc(m?m.home_team+' - '+m.away_team:'Partita')} ${x.is_own_goal?'· Autogol':''}</span></span><span><b>${x.is_correct===true?'CORRETTO':x.is_correct===false?'ERRATO':'DA VERIFICARE'}</b> <button class="secondary" data-scorer-correct="${x.id}" data-value="true">Corretto</button> <button class="secondary" data-scorer-correct="${x.id}" data-value="false">Errato</button></span></div>`}).join('');
+ document.querySelectorAll('[data-scorer-correct]').forEach(b=>b.onclick=async()=>{
+  b.disabled=true;
+  const {error}=await sb.from('scorer_predictions').update({is_correct:b.dataset.value==='true'}).eq('id',b.dataset.scorerCorrect);
+  if(error){b.disabled=false;return msg('Errore aggiornamento marcatore: '+error.message,true)}
+  const calc=await sb.rpc('recalculate_pronosticando_scores');
+  if(calc.error){b.disabled=false;return msg('Marcatore aggiornato, ma ricalcolo non riuscito: '+calc.error.message,true)}
+  msg('Esito marcatore aggiornato e punteggi ricalcolati.');
+  await Promise.all([loadScorerAdmin(),loadRanking()]);
+ });
+}
+$('recalcScores').onclick=async()=>{
+ $('recalcScores').disabled=true;
+ const {data,error}=await sb.rpc('recalculate_pronosticando_scores');
+ $('recalcScores').disabled=false;
+ if(error)return msg('Errore ricalcolo punteggi: '+error.message,true);
+ msg(data?.message||'Punteggi ricalcolati.');
+ await loadRanking();
+};
+async function loadPlayersAdmin(){let {data,error}=await sb.from('players').select('id,display_name,auth_user_id,is_admin,favorite_team,favorite_team_2').order('display_name');if(error){$('playersadmin').textContent=error.message;return}$('playersadmin').innerHTML=(data||[]).map(p=>`<div class="listrow"><span>${esc(p.display_name)} ${p.is_admin?'· ADMIN':''}<br><small class="muted">${esc(p.favorite_team||'')} / ${esc(p.favorite_team_2||'')}</small></span><span>${p.auth_user_id?'Account collegato':'<b>Da collegare</b>'}</span></div>`).join('')}
 function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 document.querySelectorAll('[data-tab]').forEach(b=>b.onclick=()=>{document.querySelectorAll('[data-tab]').forEach(x=>x.classList.toggle('active',x===b));['pred','rank','scorers','admin'].forEach(t=>$('tab-'+t).classList.toggle('hidden',t!==b.dataset.tab))});
 
